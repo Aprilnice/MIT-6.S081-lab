@@ -172,6 +172,104 @@ while(p == 0) {
 
 ## 4. find（Moderate）
 
+这题实际上就是自己实现一个常见的shell指令find。
 
+显然，find需要可以遍历所有的文件路径，不管是“广搜”还是“深搜”，都需要抽象出一个find函数。
+
+因此，main函数只作为传递参数的入口。
+
+```c
+int main(int argc, char *argv[]) {
+    find(argv[2], argv[1]);
+    exit(0);
+}
+```
+
+这里选择使用递归调用的方式实现查找功能。每个find函数可以检查当前路径文件夹下是否有目标文件。
+
+代码主体参考user/ls.c的ls函数。
+
+首先是获取输入路径的状态信息
+
+```c
+char buf[512], *p;
+int fd;
+struct dirent de;
+struct stat st;
+if((fd = open(path, 0)) < 0){
+    fprintf(2, "find: cannot open %s\n", path);
+    return;
+}
+if(fstat(fd, &st) < 0){
+    fprintf(2, "find: cannot stat %s\n", path);
+    close(fd);
+    return;
+}
+```
+
+然后遍历整个文件夹，寻找目标文件，如果文件是文件夹就调用find函数递归。
+
+```c
+strcpy(buf, path);
+p = buf+strlen(buf);
+*p++ = '/';
+while(read(fd, &de, sizeof(de)) == sizeof(de)){
+    if(de.inum == 0)
+        continue;
+    memmove(p, de.name, DIRSIZ);
+    p[DIRSIZ] = 0;
+    if(strcmp(de.name, goal) == 0) {
+        printf("%s/%s\n", path, de.name);
+    }
+
+    if(stat(buf, &st) < 0){
+        continue;
+    }
+    if(st.type == T_DIR && strcmp(de.name, ".") != 0 && strcmp(de.name, "..") != 0) {
+        find(goal, buf);
+    }
+}
+close(fd);
+```
+
+需要注意的是，路径中会有.文件以及..文件，这两个文件夹会导致无限递归，需要单独判断。
 
 ## 5.  xargs（Moderate）
+
+首先需要知道的是，实际要做的就是将|前命令的输出作为参数输入到xargs中并执行相应的命令。
+
+先获取已知的参数
+
+```c
+char buf[512], r;
+char *params[4];
+int count = 0;
+params[0] = argv[1];
+params[1] = argv[2];
+params[3] = 0;
+```
+
+对于例子find . b | xargs grep hello，params[0]就是grep，params[1]就是hello，params[3]为0表示参数结束。这些都是exec函数需要的参数。
+
+接着是获取前一段命令的输出。
+
+```c
+while(read(0, &r, 1) != 0) {
+    if(r == '\n'){
+        buf[count] = '\0';
+        params[2] = buf;
+        if(fork() == 0) {
+            exec(params[0], params);
+            exit(0);
+        }
+        count = 0;
+        continue;
+    }
+    buf[count] = r;
+    count++;
+}
+wait((int *) 0);
+exit(0);
+```
+
+因为前一个命令的输出可以有多个，且是标准输出（即读文件描述符为0）。因此按字节读取，读到换行符即为一个完整的输出了，此时fork一个子进程通过exe执行命令。循环往复，直到标准输出已经被读完，等到所有子孙进程结束即可。
