@@ -15,7 +15,7 @@ if(argc <= 1) {
 
 ```c
 if(sleep(atoi(argv[1])) == -1) {
-	fprintf(2, "sleep error\n");
+    fprintf(2, "sleep error\n");
     exit(1);
 }
 ```
@@ -57,10 +57,121 @@ if (pid == 0) {
 }
 ```
 
+对于父进程，向p1中写入，从p2中读取即可。
 
+```c
+else {
+    n = write(p1[1], "t", 1);
+    if(n == 0) {
+        fprintf(2, "parent write error\n");
+        exit(1);
+    }
+    n = read(p2[0], &s1, 1);
+    if(n == 0) {
+        fprintf(2, "parent read error\n");
+        exit(1);
+    }else {
+        printf("%d: received pong\n", pid);
+    }
+}
+```
+
+退出程序前，关闭用到的文件描述符
+
+```c
+close(p1[0]);
+close(p1[1]);
+close(p2[0]);
+close(p2[1]);
+exit(0);
+```
+
+补充说明：
+
+这里父进程不需要使用wait来确定子进程已经向p2中写入字节了（当然也可以用）。
+
+这是因为za在xv6中**管道**的read函数与普通的read函数不一样。
+
+对于普通的read函数，会在读到文件结束时返回0。但是管道的read函数会在没有可用数据时进入等待状态，只有在所有指向这个管道写入端的文件描述符都被关闭之后（即不可能有写入之后）才会返回0。（这部分可见xv6手册第一章第三节）
 
 ## 3. primes（Moderate/Hard）
 
+这一题的难度稍微大了一点，需要先分析一下题目。
+
+很显然，这里需要创建多个子进程和多个管道。每个进程通过管道从直接父进程中获取数据，并打印一个素数，同时将其余数据通过管道传递给当前进程的直接子进程。为了便于打印，需要保证写入通道的第一个数为素数（通过Eratosthenes的筛选法实现）。
+
+首先，为了让代码易于理解，先写一个专门处理当前进程数字的函数。
+
+```c
+void output(uint32 i, int r, int w) {
+    int n;
+    uint32 p;
+    while(1) {
+        n = read(r, &p, 4);
+        if(n == 0) {
+            break;
+        }
+        if(p % i != 0) {
+            n = write(w, &p, 4);
+        }
+    }
+    close(r);
+    close(w);
+}
+```
+
+显然，r是外部传递进来的用于读入数据的文件描述符，w是外部传递进来的用于写入数据的文件描述符。显然，由于每个进程都从直接父进程获取数据，那么每个管道的只会在父进程中write、在子进程中read。因此，在最后要关闭r和w以节省有限的文件描述符。
+
+根据题目，很容易联想到使用递归来解决。由于最开始只有写这一操作，而没有读。因此递归从第一个子进程开始。
+
+```c
+int main(int argc, char *argv[]) {
+    int right[2], tmp, n, p;
+    uint32 i,t;
+    pipe(right);
+    p = fork();
+    while(p == 0) {
+        // ...
+    }
+
+    for(i = 2; i < 36; i++) {
+        write(right[1], &i, 4);
+    }
+    close(right[1]);
+    wait((int *) 0);
+    exit(0);
+}
+```
+
+主进程向管道内写入，然后等待所有子孙进程结束。
+
+关键在于循环部分。
+
+```c
+while(p == 0) {
+    tmp = right[0];
+    n = read(tmp, &t, 4);
+    if(n == 0) {
+        close(tmp);
+        exit(0);
+    }
+    printf("prime %d\n", t);
+    pipe(right);
+    output(t, tmp, right[1]);
+    p = fork();
+    if(p != 0) {
+        wait((int *) 0);
+        exit(0);
+    }
+}
+```
+
+首先，记录父进程管道的读文件描述符。然后读取一个四字节的数字并打印（Eratosthenes的筛选法确保第一个数为素数）。然后创建一个新的管道，文件描述符也记录在right中，作为与子进程传输的管道。接着再fork一个子进程。每个子进程都在其子孙进程全部退出后才退出。
+
+在output中会关闭来自父进程管道的**读**文件描述符，以及与子进程之间管道的**写**文件描述符。
+
 ## 4. find（Moderate）
+
+
 
 ## 5.  xargs（Moderate）
