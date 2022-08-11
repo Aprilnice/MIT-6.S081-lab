@@ -157,9 +157,9 @@ while(p == 0) {
     }
     printf("prime %d\n", t);
     pipe(right);
-    output(t, tmp, right[1]);
     p = fork();
     if(p != 0) {
+        output(t, tmp, right[1]);
         wait((int *) 0);
         exit(0);
     }
