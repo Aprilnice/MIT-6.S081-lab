@@ -137,3 +137,122 @@ void freewalk_new(pagetable_t pagetable)
 ```
 
 ### 3.Simplify `copyin`/`copyinstr`（hard）
+
+先在`vm.c`中添加一个将用户页表复制到内核页表的函数（注意在内核模式下，无法访问设置了`PTE_U`的页面）
+
+```c
+void uvmcopy_new(pagetable_t pagetable, pagetable_t kpagetable, uint64 oldsz, uint64 newsz){
+  pte_t *pte_from, *pte_to;
+  oldsz = PGROUNDUP(oldsz);
+  for (uint64 i = oldsz; i < newsz; i += PGSIZE){
+    if((pte_from = walk(pagetable, i, 0)) == 0)
+      panic("u2kvmcopy: src pte does not exist");
+    if((pte_to = walk(kpagetable, i, 1)) == 0)
+      panic("u2kvmcopy: pte walk failed");
+    uint64 pa = PTE2PA(*pte_from);
+    uint flags = (PTE_FLAGS(*pte_from)) & (~PTE_U);
+    *pte_to = PA2PTE(pa) | flags;
+  }
+}
+```
+
+内核中更改进程内容的地方都需要调用`uvmcopy_new()`
+
+- `userinit()`
+
+  ```c
+  void userinit(void) {
+    struct proc *p;
+  
+    p = allocproc();
+    initproc = p;
+    
+    // allocate one user page and copy init's instructions
+    // and data into it.
+    uvminit(p->pagetable, initcode, sizeof(initcode));
+    p->sz = PGSIZE;
+  
+    // prepare for the very first "return" from kernel to user.
+    p->trapframe->epc = 0;      // user program counter
+    p->trapframe->sp = PGSIZE;  // user stack pointer
+  
+    // 复制用户映射到内核页表
+    uvmcopy_new(p->pagetable, p->kpagetable, 0, p->sz);
+  
+    safestrcpy(p->name, "initcode", sizeof(p->name));
+    p->cwd = namei("/");
+  
+    p->state = RUNNABLE;
+  
+    release(&p->lock);
+  }
+  ```
+
+- `fork()`
+
+  ```c
+  int fork(void) {
+      // ...
+      
+      // increment reference counts on open file descriptors.
+      for(i = 0; i < NOFILE; i++)
+          if(p->ofile[i])
+              np->ofile[i] = filedup(p->ofile[i]);
+    	np->cwd = idup(p->cwd);
+      
+  	// 复制到新进程的内核页表
+      uvmcopy_new(np->pagetable, np->kpagetable, 0, np->sz);
+  
+    	safestrcpy(np->name, p->name, sizeof(p->name));
+      // ...
+  }
+  ```
+
+- `exec.c/exec()`
+
+  ``` c
+  int exec(char *path, char **argv) {
+      // ...
+      stackbase = sp - PGSIZE;
+  
+    	// 将用户映射复制到内核页表
+    	uvmcopy_new(pagetable, p->kpagetable, 0, sz);
+  
+    	// Push argument strings, prepare rest of stack in ustack.
+    	for(argc = 0; argv[argc]; argc++) {
+          // ...
+      }
+      
+      // ...
+  }
+  ```
+
+- `sbrk()`
+
+  通过`sysproc.c/sys_sbrk()`可知，实际调用的是`proc.c/growproc()`函数
+
+  ```c
+  int growproc(int n) {
+      // ...
+      if(n > 0){
+          // 添加PLIC大小限制
+          if (PGROUNDUP(sz + n) >= PLIC){
+              return -1;
+          }
+          if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
+              return -1;
+          }
+          
+          // 复制用户映射到内核页表
+          uvmcopy_new(p->pagetable, p->kpagetable, sz - n, sz);
+      
+      } else if(n < 0){
+          sz = uvmdealloc(p->pagetable, sz, sz + n);
+      }
+      p->sz = sz;
+      return 0;
+  }
+  ```
+
+  
+
