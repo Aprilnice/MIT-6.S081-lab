@@ -67,8 +67,11 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  uvmunmap(p->kpagetable, p->kstack, 1, 1);
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  if(p->kpagetable)
+    freewalk_new(p->kpagetable);
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -78,20 +81,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
-
-  // 修改开始
-  uvmunmap(p->kpagetable, p->kstack, 1, 1);
   p->kstack = 0;
-  if(p->kpagetable)
-    proc_freekpagetable(p->kpagetable);
   p->kpagetable = 0;
-  // 修改结束
-
-}
-
-// 释放进程内核页表(不释放物理内存页表)
-void proc_freekpagetable(pagetable_t pagetable) {
-  freewalk_new(pagetable);
 }
 
 void
